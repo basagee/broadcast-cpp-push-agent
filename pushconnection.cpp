@@ -51,6 +51,7 @@ PushConnection::PushConnection(/*char* deviceId*/) {
     this->connData = NULL;
     this->retryConnectionTimerId = 0;
     this->status = 0;
+    this->stopGenerator = NONE_STOP;
 }
 
 PushConnection::PushConnection(/*char* deviceId, */PushConnData* connData) { 
@@ -64,6 +65,7 @@ PushConnection::PushConnection(/*char* deviceId, */PushConnData* connData) {
     this->retryConnectionTimerId = 0;
     
     this->status = 0;
+    this->stopGenerator = NONE_STOP;
 }
 
 PushConnection::~PushConnection() { 
@@ -74,6 +76,10 @@ PushConnection::~PushConnection() {
 }
 
 void PushConnection::setPushConnectionData(PushConnData* connData) {
+    if (this->connData != NULL) {
+        delete this->connData;
+    }
+    this->connData = NULL;
     this->connData = connData;
 }
 
@@ -135,6 +141,23 @@ int PushConnection::connectToServer() {
         return SOCKET_OPEN_ERROR;
     }
     
+#if 0    
+    struct timeval timeout;      
+    timeout.tv_sec = 10;
+    timeout.tv_usec = 0;
+
+    if (setsockopt (sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                sizeof(timeout)) < 0) {
+        log(ERROR, "setsockopt failed\n");
+    }
+
+    if (setsockopt (sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout,
+                sizeof(timeout)) < 0) {
+        log(ERROR, "setsockopt failed\n");
+    }
+#endif
+
+        log(DEBUG, "get hostbyname = %s\n", this->connData->getGwIpAddr());
     server = gethostbyname(this->connData->getGwIpAddr());
     if (server == NULL) {
         log(ERROR, "Error, no such host\n");
@@ -166,32 +189,52 @@ int PushConnection::connectToServer() {
     return OK;
 }
 
+int PushConnection::isConnected() {
+    int error_code;
+    int error_code_size = sizeof(error_code);
+    getsockopt(this->sockfd, SOL_SOCKET, SO_ERROR, &error_code, (socklen_t *)&error_code_size);
+    if (error_code == 0) {
+        return 1;
+    }
+    
+    return 0;
+}
 
 int PushConnection::stopPushAgent() {
-    log(DEBUG, "stopPushAgent called.\n");
+    log(DEBUG, "stopPushAgent called current stopGenerator = %d\n", this->getStopGenerator());
+    if (this->getStopGenerator() == NONE_STOP) {
+        this->setStopGenerator(STOP_BY_INTERNAL);
+    }
+    log(DEBUG, "               set current stopGenerator = %d\n", this->getStopGenerator());
     if (this->readThread > 0) {
         // i/o blocking 되어 있다. 
         /*pthread_cancel*/pthread_kill(this->readThread, SIGUSR1);
         pthread_join(this->readThread, NULL);
         pthread_attr_destroy(&attr);
         log(DEBUG, "Pthread killed\n");
+    } else {
+        // read thread가 실행중이지 않으므로... 
+        this->setStopGenerator(NONE_STOP);
     }
     
     if (sockfd > 0) {
         close(sockfd);
     }
-    
-    // stop keep-alive timer
-    if (this->keepAliveTimerId > 0) {
-        Utils::stopTimer(this->keepAliveTimerId);
+
+    if (this->getStopGenerator() != STOP_BY_READ_THREAD) {
+        // stop keep-alive timer
+        if (this->keepAliveTimerId > 0) {
+            Utils::stopTimer(this->keepAliveTimerId);
+        }
+        this->keepAliveTimerId = 0;
     }
+    
     if (this->keepAliveRespTimerId > 0) {
         Utils::stopTimer(this->keepAliveRespTimerId);
     }
     if (this->retryConnectionTimerId > 0) {
         Utils::stopTimer(this->retryConnectionTimerId);
     }
-    this->keepAliveTimerId = 0;
     this->keepAliveRespTimerId = 0;
     this->readThread = 0;
     this->sockfd = 0;
@@ -542,14 +585,14 @@ int PushConnection::runReadThread() {
     if (res != 0) {  
         log(ERROR, "Attribute init failed");  
         return READ_THREAD_FAILED;
-    }  
+    }
     res = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);  
     if (res != 0) {  
         log(ERROR, "Setting detached state failed");  
         return READ_THREAD_FAILED;
     }  
-  
-    signal(SIGUSR1, readThreadSignalHandler);
+
+    signal(SIGUSR1, readThreadSignalHandler);           // Register signal handler before going thread
     res = pthread_create(&readThread, &attr, ReadThreadFunc, this);  
     if (res != 0) {  
         log(ERROR, "Creation of thread failed");  
@@ -559,7 +602,10 @@ int PushConnection::runReadThread() {
     return OK;
 }
 
-void PushConnection::readThreadSignalHandler(int signum) { pthread_exit(NULL); }
+void PushConnection::readThreadSignalHandler(int signum) { 
+    log(DEBUG, "readThreadSignalHandler called\n");
+    //signal(SIGUSR1, readThreadSignalHandler()); 
+}
 
 int PushConnection::ntohlFromCharArray(char* arr){
     if (arr == NULL) {
@@ -612,7 +658,9 @@ void* PushConnection::ReadThreadFunc(void* objParam) {
     
     int numRead = 0;
     int isContinue = 0;
-    
+
+#if 1
+#else
     static sigset_t mask;
 
     sigemptyset(&mask);
@@ -621,6 +669,7 @@ void* PushConnection::ReadThreadFunc(void* objParam) {
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0) {
         log(ERROR, "pthread_sigmask\n");
     }
+#endif
     log(DEBUG, "pthread_id = %d, sockfd = %d\n", pthread_self(), sockfd);  
     while (1) {
         if (isContinue) {
@@ -687,18 +736,30 @@ void* PushConnection::ReadThreadFunc(void* objParam) {
         }
     }
     
+#if 0    
     log(DEBUG, "Unblocking SIGUSR1 in thread...\n");
     if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0) {
         log(ERROR, "pthread_sigmask\n");
     }
-//    if (errno == EINTR) {
-//        log(DEBUG, "ReadThreadFunc closed by internal\n");
-//    }
-    log(ERROR, "ReadThreadFunc recv numRead = %d\n", numRead);
+#endif
+    if (thr->getStopGenerator() == STOP_BY_INTERNAL) {
+        log(DEBUG, "==> STOP_BY_INTERNAL flag clear !!!\n");
+        thr->setStopGenerator(NONE_STOP);
+        log(DEBUG, "ReadThreadFunc closed by internal\n");
+    } else {
+        // 서버 연결이 해제된 경우. 5초후에 재연결한다. 
+        thr->setStopGenerator(STOP_BY_READ_THREAD);
+        log(ERROR, "ReadThreadFunc error recv numRead = %d\n", numRead);
+        if (thr->keepAliveRespTimerId > 0) {
+            Utils::stopTimer(thr->keepAliveRespTimerId);
+        }
+        // 타이머가 초기화되지 않도록 새로운 변수 사용한다. 
+        //timer_t recvErrorTimer;
+        Utils::startTimer(&thr->keepAliveRespTimerId, keepAliveResponseTimerFunc, thr, NOT_RESPOND_RETRY_TIMER_MS_INTERVAL, 0);
+    }
     
     return NULL;
 }  
-
 
 // timer callback function 
 void PushConnection::retryTimerFunc(int sig, siginfo_t *si, void *uc) {  
@@ -742,12 +803,17 @@ void PushConnection::keepAliveResponseTimerFunc(int sig, siginfo_t *si, void *uc
         return;
     }
     PushConnection *thr  = (PushConnection *)(si->si_value.sival_ptr); 
+    log(DEBUG, "keepAliveResponseTimerFunc called. not respond. stop push agent and reconnect\n");
+
+    thr->stopPushAgent();
+    if (thr->getStopGenerator() == STOP_BY_READ_THREAD) {
+        log(DEBUG, "==> STOP_BY_READ_THREAD flag clear !!!\n");
+        thr->setStopGenerator(NONE_STOP);
+    }
     if (thr->keepAliveRespTimerId > 0) {
         Utils::stopTimer(thr->keepAliveRespTimerId);
     }
     thr->keepAliveRespTimerId = 0;
-    log(DEBUG, "keepAliveResponseTimerFunc called. not respond. stop push agent and reconnect\n");
 
-    thr->stopPushAgent();
     Utils::startTimer(&thr->retryConnectionTimerId, retryTimerFunc, thr, NOT_RESPOND_RETRY_TIMER_MS_INTERVAL, 0);
 }  
