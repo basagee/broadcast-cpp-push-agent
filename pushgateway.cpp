@@ -150,6 +150,7 @@ PushConnData* PushGateway::getPushGatewayInfoFromServer(const char* deviceId, ht
             connData->setAuthKey((char*)resDoc["DEVICE_AUTH_KEY"].GetString());
             connData->setGwIpAddr((char*)resDoc["CONN_IP"].GetString());
             connData->setGwPort((char*)resDoc["CONN_PORT"].GetString());
+            log(DEBUG, "     (char*)resDoc[\"CONN_IP\"].GetString() = %s\n", (char*)resDoc["CONN_IP"].GetString());
             connData->setKeepAlivePeriod((char*)resDoc["KEEP_ALIVE_PERIOD"].GetString());
             *retCode = ret;
             return connData;
