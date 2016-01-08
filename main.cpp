@@ -17,28 +17,134 @@
 #include "rapidjson/reader.h"
 
 #include <sys/time.h>
+#include <net/if.h>
 
 using namespace std;
 using namespace rapidjson;
 
-void timerHandler(int sig, siginfo_t *si, void *uc);
+#define DEVICE_ID_LENGTH                        40
+#define CHECK_NETWORK_STATUS_TIMER_INTERVAL     60000
+#define RETRY_PUSH_GATEWAY_TIMER_INTERVAL       60000
+
+void checkNetworkStatusTimerHandler(int sig, siginfo_t *si, void *uc);
+void checkNetworkStatusTimerHandler2(int sig, siginfo_t *si, void *uc);
+void checkNetworkStatusTimerHandler3(int sig, siginfo_t *si, void *uc);
+void retryPushGatewayTimerHandler(int sig, siginfo_t *si, void *uc);
 void messageQueueFunc(mqd_t *mqDes, void *buffer, int bufferSize, void *userData);
+int readIfaceUrlFromFile(char **ifaceServerAddr);
+int writeIfaceUrlToFile(char *ifaceServerAddr);
+char* readDeviceIdFromFile();
+int writeDeviceIdToFile(char *deviceId);
+int getInfoAndStartPushAgent();
+
+// .h
+class PushAgentSingleton {
+    public:
+        static PushAgentSingleton& getInstance() {
+            if (destroyed) {
+            new(pInst) PushAgentSingleton; // 2)
+            atexit(killPushAgentSingleton);
+            destroyed = false;
+            } else if (pInst == 0) {
+            create();
+            }
+            return *pInst;
+        }
+        
+        void setPushInterfaceServerAddress(char *ifaceAddr) { 
+            if (this->pushInterfaceServerAddr != NULL) {
+                free(pushInterfaceServerAddr);
+            }
+            this->pushInterfaceServerAddr = ifaceAddr; 
+        }
+        const char* getPushInterfaceServerAddress() { return this->pushInterfaceServerAddr; }
+        void setDeviceId(char *deviceId) { 
+            if (this->deviceId != NULL) {
+                free(deviceId);
+            }
+            this->deviceId = deviceId; 
+        }
+        const char* getDeviceId() { return this->deviceId; }
+        PushConnection* getPushConnection() { return this->pushConnection; }
+        
+        timer_t retryPushGatewayTimerId;
+        int processingRetryConnection;
+
+    private:
+        PushAgentSingleton() {}
+        PushAgentSingleton(const PushAgentSingleton & other);
+        ~PushAgentSingleton() {
+            destroyed = true;  // 1)
+        }
+
+        static void create() {
+            static PushAgentSingleton inst;
+            pInst = &inst;
+            
+            pInst->retryPushGatewayTimerId = 0;
+            pInst->processingRetryConnection = 0;
+            if (pInst->getPushConnection() == NULL) {
+                log(DEBUG, "PushConnection created!!!!\n");
+                pInst->createNewPushConnection(0);
+            }
+        }
+
+        static void killPushAgentSingleton() {
+            static PushAgentSingleton inst;
+            pInst = &inst;
+            
+            if (pInst->getPushInterfaceServerAddress() != NULL) {
+                pInst->setPushInterfaceServerAddress(NULL);
+            }
+            if (pInst->getDeviceId() != NULL) {
+                pInst->setDeviceId(NULL);
+            }
+            if (pInst->getPushConnection() != NULL) {
+                pInst->createNewPushConnection(1);
+            }
+            pInst->~PushAgentSingleton();  // 3)
+        }
+        void createNewPushConnection(int justDelete) { 
+            if (this->pushConnection != NULL) {
+                this->pushConnection->stopPushAgent();
+                delete this->pushConnection;
+            }
+            if (!justDelete) {
+                pushConnection = new PushConnection(); 
+            }
+        }
+
+        static bool destroyed;
+        static PushAgentSingleton* pInst;
+
+    protected:
+        char* pushInterfaceServerAddr;
+        char* deviceId;
+        PushConnection *pushConnection;
+};
+
+// .cpp 
+bool PushAgentSingleton::destroyed = false;
+PushAgentSingleton* PushAgentSingleton::pInst = 0;
 
 int readIfaceUrlFromFile(char **ifaceServerAddr) {
     FILE* fi;
     char tmp[MAX_IFACE_URL_SIZE];
     memset(tmp, 0, sizeof(tmp));
     
+    *ifaceServerAddr = NULL;
     if ((fi = fopen("./serverInfo", "r")) != NULL) {
-        while (fgets(tmp, MAX_IFACE_URL_SIZE, fi) != NULL) {
+        if (fgets(tmp, MAX_IFACE_URL_SIZE, fi) != NULL) {
             cout << "Read from file ifaceServerAddr = " << tmp << endl;
             
-            *ifaceServerAddr = (char *)malloc(MAX_IFACE_URL_SIZE);
-            if (!Utils::startsWith("http://", tmp)) {
-                memcpy(*ifaceServerAddr, "http://", strlen("http://"));
-                memcpy(*ifaceServerAddr + strlen("http://"), tmp, strlen(tmp));
-            } else {
-                memcpy(*ifaceServerAddr, tmp, strlen(tmp));
+            if (strlen(tmp) > 0) {
+                *ifaceServerAddr = (char *)malloc(MAX_IFACE_URL_SIZE);
+                if (!Utils::startsWith("http://", tmp)) {
+                    memcpy(*ifaceServerAddr, "http://", strlen("http://"));
+                    memcpy(*ifaceServerAddr + strlen("http://"), tmp, strlen(tmp));
+                } else {
+                    memcpy(*ifaceServerAddr, tmp, strlen(tmp));
+                }
             }
             
             fclose(fi);
@@ -49,6 +155,7 @@ int readIfaceUrlFromFile(char **ifaceServerAddr) {
     if (fi != NULL) {
         fclose(fi);
     }
+    *ifaceServerAddr = NULL;
     return 0;
 }
 
@@ -114,22 +221,57 @@ int writeDeviceIdToFile(char *deviceId) {
     return ret;
 }
 
-#define DEVICE_ID_LENGTH                40
-
-int main(int argc, char **argv) {
+int getInfoAndStartPushAgent() {
+    PushAgentSingleton::getInstance().processingRetryConnection = 0;
     PushGateway pushGateway;
-    PushConnection *pushConnection;
     
+    if (PushAgentSingleton::getInstance().getPushInterfaceServerAddress() == NULL) {
+        log(ERROR, "PushInterfaceServerAddress is NULL. Do not anything...\n");
+    }
     
+    // get push gateway information and start push agent 
+    log(DEBUG, "Iface Server URL = %s\n", PushAgentSingleton::getInstance().getPushInterfaceServerAddress());
+    
+    pushGateway.setIfaceServerAddr(PushAgentSingleton::getInstance().getPushInterfaceServerAddress());
+    http_retcode ret = (http_retcode)200;
+    PushConnData* connData = pushGateway.getPushGatewayInfoFromServer(PushAgentSingleton::getInstance().getDeviceId(), &ret);
+    if (ret != 200) {
+        // retry after 1 minutes...
+        log(ERROR, "PushGateway server failed. Retry after 1 minutes;\n");
+        Utils::startTimer(&PushAgentSingleton::getInstance().retryPushGatewayTimerId, retryPushGatewayTimerHandler, 
+                                        NULL, RETRY_PUSH_GATEWAY_TIMER_INTERVAL, 0);
+    } else {
+        // connect to push gateway server
+        log(DEBUG, "Connect to push gateway server = %s\n", connData->getGwIpAddr());
+        if (connData == NULL) {
+            PushAgentSingleton::getInstance().getPushConnection()->setPushConnectionData(NULL);
+        } else {
+            /*char *deviceId = (char *)malloc(41);
+            memset(deviceId, 0x00, 41);
+            memcpy(deviceId, hexstring, 41);*/
+            PushAgentSingleton::getInstance().getPushConnection()->setPushConnectionData(connData);
+            PushAgentSingleton::getInstance().getPushConnection()->startPushAgent();
+        }
+    }
+    PushAgentSingleton::getInstance().processingRetryConnection = 0;
+}
+
+void setDeviceId() {
+    if (PushAgentSingleton::getInstance().getDeviceId() != NULL) {
+    }
     char *savedDeviceId = readDeviceIdFromFile();
-    char deviceId[DEVICE_ID_LENGTH + 1]; // 40 chars + a zero
-    deviceId[DEVICE_ID_LENGTH] = 0;
+    char *deviceId = (char*)malloc(DEVICE_ID_LENGTH + 1); // 40 chars + a zero
+    memset(deviceId, 0x00, DEVICE_ID_LENGTH + 1);
+    //deviceId[DEVICE_ID_LENGTH] = 0;
 
     if (savedDeviceId == NULL || strlen(savedDeviceId) == 0) {
         unsigned char macAddress[6];
-        if (!Utils::getMacAddress(macAddress)) {
+        char ifaceName[IFNAMSIZ];
+        if (!Utils::getMacAddress(macAddress, ifaceName)) {
             log(ERROR, "getMacAddress() failed...");
             // check network status ????
+            free(deviceId);
+            PushAgentSingleton::getInstance().setDeviceId(NULL);
         } else {
             for (int i = 0; i < 6; i++) {
                 log(DEBUG, "%d value = %d\n", i, *(macAddress + i));
@@ -152,17 +294,18 @@ int main(int argc, char **argv) {
             log(INFO, "SHA1 hex string = %s\n", deviceId);
             memcpy(deviceId, "d69f0a84d4cc3d80261298ad1edf5cdfee94bfdc", DEVICE_ID_LENGTH);
             writeDeviceIdToFile(deviceId);
+            
+            PushAgentSingleton::getInstance().setDeviceId(deviceId);
         }
-        
     } else {
         memcpy(deviceId, savedDeviceId, DEVICE_ID_LENGTH);
+        PushAgentSingleton::getInstance().setDeviceId(deviceId);
     }
+}
+
+int main(int argc, char **argv) {
     
-    // Read Interface Server URL from file 
-    FILE* fi;
-    char* ifaceServerAddr;
-    
-    // set message queue 
+    // first, message queue enable
     MessageQueueInfo info;
     info.mqName = (char*)malloc(strlen(MQ_NAME_MAINQUEUE) + 1);
     memset(info.mqName, 0x00, strlen(MQ_NAME_MAINQUEUE) + 1);
@@ -183,47 +326,35 @@ int main(int argc, char **argv) {
         exit(0);
     }
 
-    // connect to push agent
-    if (readIfaceUrlFromFile(&ifaceServerAddr)) {
-        // get push gateway information and start push agent 
-        log(DEBUG, "Iface Server URL = %s\n", ifaceServerAddr);
-        
-        pushGateway.setIfaceServerAddr(ifaceServerAddr);
-        http_retcode ret = (http_retcode)200;
-        PushConnData* connData = pushGateway.getPushGatewayInfoFromServer(deviceId, &ret);
-        if (ret != 200) {
-            if (ret != ERRSERVER) {
-            // retry after 1 minutes...
-            } else {
-                log(ERROR, "Server returns error !!!!\n");
-            }
-        } else {
-            // connect to push gateway server
-            log(DEBUG, "Connect to push gateway server\n");
-            if (connData == NULL) {
-            } else {
-                /*char *deviceId = (char *)malloc(41);
-                memset(deviceId, 0x00, 41);
-                memcpy(deviceId, hexstring, 41);*/
-                pushConnection = new PushConnection(/*deviceId*/);
-                pushConnection->setPushConnectionData(connData);
-                pushConnection->startPushAgent();
-                
-    // timer test
-    //timer_t timerId;
-    //Utils::startTimer(&timerId, timerHandler, pushConnection, 60000, 1);
-                
-            }
-        }
-    } else {
-        // do nothing...
-        log(DEBUG, "can't read push interface server info.!!!");
-        sleep(3);
+    // second, get and set deviceId
+    setDeviceId();
+    
+    // third, Read Interface Server URL from file 
+    // check network status
+    if (!Utils::checkNetworkStatus()) {
+        log(ERROR, "network unavailable...\n");
     }
     
+    char* ifaceServerAddr;
+    readIfaceUrlFromFile(&ifaceServerAddr);
+    PushAgentSingleton::getInstance().setPushInterfaceServerAddress(ifaceServerAddr);
+    
+    // fourth, check network status every 1minutes.
+    timer_t checkNetworkStatusTimerId;
+    Utils::startTimer(&checkNetworkStatusTimerId, checkNetworkStatusTimerHandler, 
+                                    NULL, 10000/*CHECK_NETWORK_STATUS_TIMER_INTERVAL*/, 1);
+    
+    // fifth, if (deviceId != NULL && ifaceServerAddr != NULL)
+    //        then start push agent. 
+    getInfoAndStartPushAgent();
+    
+    int i = 0;
     while (1) {
-        sleep(5);
-        pushConnection->stopPushAgent();
+        sleep(60);
+        //log(DEBUG, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n");
+        //if (i % 2 == 0) PushAgentSingleton::getInstance().getPushConnection()->stopPushAgent();
+        //else PushAgentSingleton::getInstance().getPushConnection()->startPushAgent();
+        //i++;
         /*
         cout << "send message" << endl;
 
@@ -240,23 +371,71 @@ int main(int argc, char **argv) {
         */
     }
     
+    if (checkNetworkStatusTimerId > 0) {
+        Utils::stopTimer(checkNetworkStatusTimerId);
+    }
+    
+    if (mqDes > 0) {
+        mq_close(mqDes);
+        mq_unlink(MQ_NAME_MAINQUEUE);
+    }
     return 0;
 }
 
-void timerHandler(int sig, siginfo_t *si, void *uc) {
+void checkNetworkStatusTimerHandler(int sig, siginfo_t *si, void *uc) {
     //timer_t tidp  = si->si_value.sival_ptr;
-   PushConnection *thr  = (PushConnection *)(si->si_value.sival_ptr); 
-   thr->stopPushAgent();
+    PushConnection *pushConnection  = PushAgentSingleton::getInstance().getPushConnection();
+    
+    if (Utils::checkNetworkStatus()) {
+        log(DEBUG, "### Utils::checkNetworkStatus() is success!!!\n");
+        if (!pushConnection->isAlive()) {
+            if (PushAgentSingleton::getInstance().processingRetryConnection) {
+                log(DEBUG, "### Previous retry connection is not completion. processing.....\n");
+            } else {
+                log(DEBUG, "### Network status is available...start push agent connection\n");
+                getInfoAndStartPushAgent();
+            }
+        }
+    } else {
+        log(DEBUG, "### Network status is unavailable...stop push agent connection\n");
+        if (pushConnection->isAlive()) {
+            pushConnection->stopPushAgent();
+        }
+    }
     // begin
+    /*
     struct timeval tv, tvEnd, tvDiff;
     gettimeofday(&tv, NULL);
     char buffer[30];
     time_t curtime;
 
-    log(DEBUG, "%ld.%06ld", tv.tv_sec, tv.tv_usec);
+    curtime = tv.tv_sec;
+    strftime(buffer, 30, "%m-%d-%Y  %T", localtime(&curtime));
+    log(DEBUG, "check time = %s.%06ld\n", buffer, tv.tv_usec);
+    */
+}
+
+void retryPushGatewayTimerHandler(int sig, siginfo_t *si, void *uc) {
+    //timer_t tidp  = si->si_value.sival_ptr;
+    log(DEBUG, "### retryPushGatewayTimerHandler expired!!!!\n");
+    
+    if (PushAgentSingleton::getInstance().retryPushGatewayTimerId > 0) {
+        Utils::stopTimer(PushAgentSingleton::getInstance().retryPushGatewayTimerId);
+    }
+    PushAgentSingleton::getInstance().retryPushGatewayTimerId = 0;
+
+    getInfoAndStartPushAgent();
+    // begin
+    /*
+    struct timeval tv, tvEnd, tvDiff;
+    gettimeofday(&tv, NULL);
+    char buffer[30];
+    time_t curtime;
+
     curtime = tv.tv_sec;
     strftime(buffer, 30, "%m-%d-%Y  %T", localtime(&curtime));
     log(DEBUG, " = %s.%06ld\n", buffer, tv.tv_usec);
+    */
 }
 
 void messageQueueFunc(mqd_t *mqDes, void *buffer, int bufferSize, void* userData) {
