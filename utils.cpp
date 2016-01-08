@@ -31,7 +31,7 @@
 #include <iostream>
 using namespace std;
 
-int Utils::getMacAddress(unsigned char *macAddress) {
+int Utils::getMacAddress(unsigned char *macAddress, char *ifaceName) {
     struct ifreq ifr;
     struct ifconf ifc;
     char buf[1024];
@@ -77,28 +77,55 @@ int Utils::getMacAddress(unsigned char *macAddress) {
     
     if (success) {
         memcpy(macAddress, ifr.ifr_hwaddr.sa_data, 6);
+        memcpy(ifaceName, ifr.ifr_name, IFNAMSIZ);
     }
     
     return success;
 }
 
 int Utils::checkNetworkStatus() {
-    struct ifconf ifc;
-    char buf[1024];
     int success = 0;
     
+    unsigned char macAddress[6];
+    char ifaceName[IFNAMSIZ];
+    if (!Utils::getMacAddress(macAddress, ifaceName)) {
+        log(DEBUG, "Network device is not found!!!\n");
+        return success;
+    }
+        
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock == -1) { 
         /* handle error*/ 
         return success;
     };
 
+#if 0    
+    struct ifconf ifc;
+    char buf[1024];
+    
     ifc.ifc_len = sizeof(buf);
     ifc.ifc_buf = buf;
     if (ioctl(sock, SIOCGIFCONF, &ifc) != -1) { 
         success = 1;
     }
+#else
+    struct ifreq ethreq;
+
+    memset(&ethreq, 0, sizeof(ethreq));
+    /* set the name of the interface we wish to check */
+    strncpy(ethreq.ifr_name, ifaceName, IFNAMSIZ);
+    /* grab flags associated with this interface */
+    ioctl(sock, SIOCGIFFLAGS, &ethreq);
+    if (ethreq.ifr_flags & IFF_PROMISC) {
+        log(DEBUG, "%s is in promiscuous mode\n", ethreq.ifr_name);
+    } else {
+        log(DEBUG, "%s is NOT in promiscuous mode\n", ethreq.ifr_name);
+        success = 1;
+    }
+#endif
+
     close(sock);
+    log(DEBUG, "check network status = %d\n", success);
     return success;
 }
 
@@ -107,15 +134,68 @@ int Utils::checkNetworkStatus() {
 #define ONE_MSEC_TO_NSEC        1000000
 #define ONE_SEC_TO_NSEC         1000000000
 
+#include <map>
+class HashTable {
+    std::map<timer_t, int> htmap;
+
+public:
+    void put(timer_t key, int value) {
+        htmap[key] = value;
+    }
+
+    const int get(timer_t key) {
+        return htmap[key];
+    }
+
+    void remove(timer_t key) {
+        htmap.erase(key);
+    }
+    
+    int findValue(int value) {
+        std::map<timer_t, int>::iterator it;
+        
+        for (it = htmap.begin(); it != htmap.end(); it++) {
+            if ((*it).second == value) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    
+    int getSize() {
+        return htmap.size();
+    }
+};
+
+#define MAX_RT_TIMER_SIZE               30
+HashTable hashTable;
+
 int Utils::startTimer(timer_t* timerId, void (*Func)(int, siginfo_t*, void*), void* userData, long expireInterval, int repeat) {
     struct sigevent         te;
     struct itimerspec       its;
     struct sigaction        sa;
-    int                     sigNo = SIGTIMER;
-
+    int                     sigNo;
+    
+    if (hashTable.getSize() >= MAX_RT_TIMER_SIZE) {
+        log(ERROR, "MAX timer size reached!!!!!\n");
+        return(0);
+    }
+    
+    sigNo = SIGRTMIN;
+    do {
+        if (hashTable.findValue(sigNo)) {
+            sigNo++;
+            continue;
+        } else {
+            log(DEBUG, "Found unused sigNo = %d\n", sigNo);
+            break;
+        }
+    } while (1);
+    
     /* Set up signal handler. */
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = Func;
+    
     sigemptyset(&sa.sa_mask);
     if (sigaction(sigNo, &sa, NULL) == -1) {
         log(ERROR, "Failed to setup signal handling\n");
@@ -132,6 +212,7 @@ int Utils::startTimer(timer_t* timerId, void (*Func)(int, siginfo_t*, void*), vo
 	log(ERROR, "startTimer() failed timer_create errorno = %d\n", res);
 	return 0;
     }
+    hashTable.put(timerId, sigNo);
 
     long nano_intv = expireInterval * ONE_MSEC_TO_NSEC;
     its.it_value.tv_sec = nano_intv / ONE_SEC_TO_NSEC;
@@ -149,14 +230,19 @@ int Utils::startTimer(timer_t* timerId, void (*Func)(int, siginfo_t*, void*), vo
     res = timer_settime(*timerId, 0, &its, &oitval);
     if (res != 0) {
 	log(ERROR, "startTimer() failed timer_settime errorno = %d\n", res);
+        stopTimer(timerId);
 	return 0;
     }
 
     return(1);
 }
-
+/*
+ * realtime으로 할당 가능한 갯수가 30개이다. 
+ * 중복되지 않도록 항상 불러준다. 
+ */
 int Utils::stopTimer(timer_t timerId) {
     log(DEBUG, "stopTimer timerId = %d\n", timerId);
+    hashTable.remove(timerId);
     timer_delete(timerId);
 }
 
