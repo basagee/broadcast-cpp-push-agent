@@ -28,7 +28,7 @@ class Utils {
         /*
          *  Get MAC Address 6 bytes array 
          */
-        static int getMacAddress(unsigned char* getMacAddress);
+        static int getMacAddress(unsigned char *getMacAddress, char *ifaceName);
         static int checkNetworkStatus();
 
         /*
@@ -39,7 +39,7 @@ class Utils {
         static int stopTimer(timer_t timerId);
         static bool startsWith(const char* pre, const char* str);
 
-private:
+    private:
     
 };
 
