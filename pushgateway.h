@@ -27,21 +27,63 @@ extern "C" {
 
 class PushConnData {
     public:
-        PushConnData() {};
+        PushConnData() {
+            this->sessionKey = NULL;
+            this->authKey = NULL;
+            this->gwIpAddr = NULL;
+            this->gwPort = 0;
+            this->keepAlivePeriod = 0;
+        };
         PushConnData(char *sessionKey, char *authKey, char *gwIpAddr, int gwPort) {
+            this->sessionKey = NULL;
+            this->authKey = NULL;
+            this->gwIpAddr = NULL;
+            this->gwPort = 0;
+            this->keepAlivePeriod = 0;
+            
             setSessionKey(sessionKey);
             setAuthKey(authKey);
             setGwIpAddr(gwIpAddr);
             setGwPort(gwPort);
         }
         
-        void setSessionKey(char *sessionKey) { this->sessionKey = sessionKey; }
-        const char *getSessionKey(void) { return this->sessionKey; }
+        void setSessionKey(char *sessionKey) { 
+            if (this->sessionKey != NULL) {
+                free(this->sessionKey);
+            }
+            this->sessionKey = NULL;
+            
+            this->sessionKey = (char*)malloc(strlen(sessionKey) + 1);
+            memset(this->sessionKey, 0x00, strlen(sessionKey) + 1);
+            memcpy(this->sessionKey, sessionKey, strlen(sessionKey)); 
+        }
+        const char *getSessionKey(void) { 
+            return this->sessionKey; 
+            
+        }
         
-        void setAuthKey(char *authKey) { this->authKey = authKey; }
+        void setAuthKey(char *authKey) { 
+            if (this->authKey != NULL) {
+                free(this->authKey);
+            }
+            this->authKey = NULL;
+            
+            this->authKey = (char*)malloc(strlen(authKey) + 1);
+            memset(this->authKey, 0x00, strlen(authKey) + 1);
+            memcpy(this->authKey, authKey, strlen(authKey)); 
+        }
         const char *getAuthKey(void) { return this->authKey; }
 
-        void setGwIpAddr(char *gwIpAddr) { this->gwIpAddr = gwIpAddr; }
+        void setGwIpAddr(char *ipaddr) { 
+            if (this->gwIpAddr != NULL) {
+                free(this->gwIpAddr);
+            }
+            this->gwIpAddr = NULL;
+            
+            this->gwIpAddr = (char*)malloc(strlen(ipaddr) + 1);
+            memset(this->gwIpAddr, 0x00, strlen(ipaddr) + 1);
+            memcpy(this->gwIpAddr, ipaddr, strlen(ipaddr)); 
+        }
         const char *getGwIpAddr(void) { return this->gwIpAddr; }
 
         void setGwPort(int gwPort) { this->gwPort = gwPort; }
@@ -53,7 +95,10 @@ class PushConnData {
         }
         int getGwPort(void) { return this->gwPort; }
         
-        void setKeepAlivePeriod(int keepAlivePeriod) { this->keepAlivePeriod = keepAlivePeriod; }
+        void setKeepAlivePeriod(int keepAlivePeriod) { 
+            this->keepAlivePeriod = keepAlivePeriod; 
+            
+        }
         void setKeepAlivePeriod(char *keepAlivePeriod) { 
             if (keepAlivePeriod != NULL && strlen(keepAlivePeriod) > 0) 
                 this->keepAlivePeriod = atoi(keepAlivePeriod); 
