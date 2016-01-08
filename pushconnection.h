@@ -89,6 +89,13 @@ typedef struct PushMessageHeader_t {   // Declare PERSON struct type
     int restChunkLen;
 } PushMessageHeader;   // Define object of type PERSON
 
+
+enum StopPushGenerator {
+    NONE_STOP = 0,
+    STOP_BY_READ_THREAD = 1,
+    STOP_BY_INTERNAL = 2
+};
+
 class PushConnection {
     public:
         timer_t keepAliveTimerId;
@@ -109,6 +116,7 @@ class PushConnection {
         static void readThreadSignalHandler(int signum);
         int getKeepAliveTimeSeconds() { if (connData != NULL) return connData->getKeepAlivePeriod(); else return 0; }
         int isAlive() { return status; }
+        int isConnected();
         
     protected:
         int getSockfd() { return sockfd; }
@@ -116,6 +124,8 @@ class PushConnection {
         PushMessageHeader parseMessageHeader(char *message);
         int sendRequestOrResponseToServer(PushMessageType type);
         int sendRequestOrResponseToServer(PushMessageType type, int messageId, int correlator);
+        void setStopGenerator(StopPushGenerator stopGenerator) { this->stopGenerator = stopGenerator; }
+        StopPushGenerator getStopGenerator() { return this->stopGenerator; }
     
     private:
         PushConnData* connData;
@@ -125,12 +135,13 @@ class PushConnection {
         char *deviceId;
         int requestMessageId;
         int status;
+        StopPushGenerator stopGenerator;
         
         int connectToServer();
         int runReadThread();
         static void* ReadThreadFunc(void *);
         int ntohlFromCharArray(char *arr);
-        
+        int stopPushAgent(int isInternalStop);
 };
 
 #endif                  // _PUSH_CONNECTION_H_
