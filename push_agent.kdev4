@@ -1,0 +1,4 @@
+[Project]
+Name=push_agent
+Manager=KDevCMakeManager
+VersionControl=

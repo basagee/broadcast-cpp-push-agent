@@ -1,0 +1,36 @@
+[Buildset]
+BuildItems=@Variant(\x00\x00\x00\t\x00\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00\x00\x01\x00\x00\x00\x14\x00p\x00u\x00s\x00h\x00_\x00a\x00g\x00e\x00n\x00t)
+
+[CMake]
+Build Directory Count=1
+Current Build Directory Index=0
+ProjectRootRelative=./
+
+[CMake][CMake Build Directory 0]
+Build Directory Path=file:///home/basagee/Development/push_agent/build
+Build Type=Debug
+CMake Binary=file:///usr/bin/cmake
+Environment Profile=default
+Extra Arguments=
+Install Directory=file:///usr/local
+
+[Launch]
+Launch Configurations=Launch Configuration 0
+
+[Launch][Launch Configuration 0]
+Configured Launch Modes=execute
+Configured Launchers=nativeAppLauncher
+Name=New Application Launcher
+Type=Native Application
+
+[Launch][Launch Configuration 0][Data]
+Arguments=
+Dependencies=@Variant(\x00\x00\x00\t\x00\x00\x00\x00\x01\x00\x00\x00\x0b\x00\x00\x00\x00\x01\x00\x00\x00\x14\x00p\x00u\x00s\x00h\x00_\x00a\x00g\x00e\x00n\x00t)
+Dependency Action=Build
+EnvironmentGroup=default
+Executable=file:///home/basagee/projects/push_agent/
+External Terminal=konsole --noclose --workdir %workdir -e %exe
+Project Target=push_agent,push_agent
+Use External Terminal=false
+Working Directory=file:///home/basagee/Development/push_agent
+isExecutable=false
