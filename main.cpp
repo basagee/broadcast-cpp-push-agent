@@ -23,7 +23,7 @@ using namespace std;
 using namespace rapidjson;
 
 #define DEVICE_ID_LENGTH                        40
-#define CHECK_NETWORK_STATUS_TIMER_INTERVAL     60000
+#define CHECK_NETWORK_STATUS_TIMER_INTERVAL     300000
 #define RETRY_PUSH_GATEWAY_TIMER_INTERVAL       60000
 
 void checkNetworkStatusTimerHandler(int sig, siginfo_t *si, void *uc);
@@ -342,7 +342,7 @@ int main(int argc, char **argv) {
     // fourth, check network status every 1minutes.
     timer_t checkNetworkStatusTimerId;
     Utils::startTimer(&checkNetworkStatusTimerId, checkNetworkStatusTimerHandler, 
-                                    NULL, 10000/*CHECK_NETWORK_STATUS_TIMER_INTERVAL*/, 1);
+                                    NULL, CHECK_NETWORK_STATUS_TIMER_INTERVAL, 1);
     
     // fifth, if (deviceId != NULL && ifaceServerAddr != NULL)
     //        then start push agent. 
