@@ -212,6 +212,8 @@ int PushConnection::stopPushAgent() {
         pthread_join(this->readThread, NULL);
         pthread_attr_destroy(&attr);
         log(DEBUG, "Pthread killed\n");
+        
+        this->readThread = 0;
     } else {
         // read thread가 실행중이지 않으므로... 
         this->setStopGenerator(NONE_STOP);
@@ -381,9 +383,15 @@ int PushConnection::sendRequestOrResponseToServer(PushMessageType type, int mess
     int numWrite = write(sockfd, sendBuffer, sendLen);
     if (numWrite < 0) {
         log(ERROR, "ERROR writing to socket\n");
+        if (sendBuffer != NULL) {
+            free(sendBuffer);
+        }
         return -1;
     }
     
+    if (sendBuffer != NULL) {
+        free(sendBuffer);
+    }
     return OK;
 }
 

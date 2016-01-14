@@ -16,6 +16,8 @@
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/reader.h"
 
+#include "httplib.h"
+
 #include <sys/time.h>
 #include <net/if.h>
 
@@ -42,34 +44,68 @@ class PushAgentSingleton {
     public:
         static PushAgentSingleton& getInstance() {
             if (destroyed) {
-            new(pInst) PushAgentSingleton; // 2)
-            atexit(killPushAgentSingleton);
-            destroyed = false;
+                new(pInst) PushAgentSingleton; // 2)
+                atexit(killPushAgentSingleton);
+                destroyed = false;
             } else if (pInst == 0) {
-            create();
+                create();
             }
             return *pInst;
         }
         
         void setPushInterfaceServerAddress(char *ifaceAddr) { 
             if (this->pushInterfaceServerAddr != NULL) {
-                free(pushInterfaceServerAddr);
+                log(DEBUG, "free pushInterfaceServerAddr\n");
+                free(this->pushInterfaceServerAddr);
             }
-            this->pushInterfaceServerAddr = ifaceAddr; 
+
+            this->pushInterfaceServerAddr = NULL;
+            if (ifaceAddr != NULL && strlen(ifaceAddr) > 0) {
+                this->pushInterfaceServerAddr = (char*)malloc(strlen(ifaceAddr) + 1);
+                memset(this->pushInterfaceServerAddr, 0x00, strlen(ifaceAddr) + 1);
+                memcpy(this->pushInterfaceServerAddr, ifaceAddr, strlen(ifaceAddr)); 
+            }
         }
         const char* getPushInterfaceServerAddress() { return this->pushInterfaceServerAddr; }
         void setDeviceId(char *deviceId) { 
             if (this->deviceId != NULL) {
-                free(deviceId);
+                log(DEBUG, "free deviceId\n");
+                free(this->deviceId);
             }
-            this->deviceId = deviceId; 
+
+            this->deviceId = NULL;
+            if (deviceId != NULL && strlen(deviceId) > 0) {
+                this->deviceId = (char*)malloc(strlen(deviceId) + 1);
+                memset(this->deviceId, 0x00, strlen(deviceId) + 1);
+                memcpy(this->deviceId, deviceId, strlen(deviceId)); 
+            }
         }
         const char* getDeviceId() { return this->deviceId; }
         PushConnection* getPushConnection() { return this->pushConnection; }
+        void removeAllData() {
+            log(DEBUG, "pInst->getPushInterfaceServerAddress() = %s\n", getPushInterfaceServerAddress());
+            if (getPushInterfaceServerAddress() != NULL) {
+                log(DEBUG, "pInst->setPushInterfaceServerAddress(NULL)\n");
+                setPushInterfaceServerAddress(NULL);
+            }
+            if (getDeviceId() != NULL) {
+                log(DEBUG, "pInst->setDeviceId(NULL)\n");
+                setDeviceId(NULL);
+            }
+            if (getPushConnection() != NULL) {
+                createNewPushConnection(1);
+            }
+        }
         
         timer_t retryPushGatewayTimerId;
         int processingRetryConnection;
 
+        static void killPushAgentSingleton() {
+            log(DEBUG, "killPushAgentSingleton()\n");
+            static PushAgentSingleton inst;
+            pInst = &inst;
+            pInst->~PushAgentSingleton();  // 3)
+        }
     private:
         PushAgentSingleton() {}
         PushAgentSingleton(const PushAgentSingleton & other);
@@ -89,27 +125,14 @@ class PushAgentSingleton {
             }
         }
 
-        static void killPushAgentSingleton() {
-            static PushAgentSingleton inst;
-            pInst = &inst;
-            
-            if (pInst->getPushInterfaceServerAddress() != NULL) {
-                pInst->setPushInterfaceServerAddress(NULL);
-            }
-            if (pInst->getDeviceId() != NULL) {
-                pInst->setDeviceId(NULL);
-            }
-            if (pInst->getPushConnection() != NULL) {
-                pInst->createNewPushConnection(1);
-            }
-            pInst->~PushAgentSingleton();  // 3)
-        }
         void createNewPushConnection(int justDelete) { 
             if (this->pushConnection != NULL) {
                 this->pushConnection->stopPushAgent();
+                log(DEBUG, "delete pushConnection\n");
                 delete this->pushConnection;
             }
             if (!justDelete) {
+                log(DEBUG, "create new PushConnection()\n");
                 pushConnection = new PushConnection(); 
             }
         }
@@ -135,7 +158,7 @@ int readIfaceUrlFromFile(char **ifaceServerAddr) {
     *ifaceServerAddr = NULL;
     if ((fi = fopen("./serverInfo", "r")) != NULL) {
         if (fgets(tmp, MAX_IFACE_URL_SIZE, fi) != NULL) {
-            cout << "Read from file ifaceServerAddr = " << tmp << endl;
+            cout << "Read from fi le ifaceServerAddr = " << tmp << endl;
             
             if (strlen(tmp) > 0) {
                 *ifaceServerAddr = (char *)malloc(MAX_IFACE_URL_SIZE);
@@ -259,7 +282,9 @@ int getInfoAndStartPushAgent() {
 void setDeviceId() {
     if (PushAgentSingleton::getInstance().getDeviceId() != NULL) {
     }
-    char *savedDeviceId = readDeviceIdFromFile();
+    char *savedDeviceId = NULL;
+    savedDeviceId = readDeviceIdFromFile();
+    
     char *deviceId = (char*)malloc(DEVICE_ID_LENGTH + 1); // 40 chars + a zero
     memset(deviceId, 0x00, DEVICE_ID_LENGTH + 1);
     //deviceId[DEVICE_ID_LENGTH] = 0;
@@ -301,16 +326,19 @@ void setDeviceId() {
         memcpy(deviceId, savedDeviceId, DEVICE_ID_LENGTH);
         PushAgentSingleton::getInstance().setDeviceId(deviceId);
     }
+    
+    if (deviceId != NULL) {
+        free(deviceId);
+    }
 }
 
 int main(int argc, char **argv) {
     
     // first, message queue enable
     MessageQueueInfo info;
-    info.mqName = (char*)malloc(strlen(MQ_NAME_MAINQUEUE) + 1);
-    memset(info.mqName, 0x00, strlen(MQ_NAME_MAINQUEUE) + 1);
-    memcpy(info.mqName, MQ_NAME_MAINQUEUE, strlen(MQ_NAME_MAINQUEUE));
-    info.mqNameSize = strlen(MQ_NAME_MAINQUEUE);
+    memset(info.mqName, 0x00, MQ_NAME_MAINQUEUE_SIZE + 1);
+    memcpy(info.mqName, MQ_NAME_MAINQUEUE, MQ_NAME_MAINQUEUE_SIZE);
+    info.mqNameSize = MQ_NAME_MAINQUEUE_SIZE;
     info.flag = O_CREAT | O_RDWR | O_NONBLOCK;
     info.Func = messageQueueFunc;
     
@@ -335,9 +363,13 @@ int main(int argc, char **argv) {
         log(ERROR, "network unavailable...\n");
     }
     
-    char* ifaceServerAddr;
+    char* ifaceServerAddr = NULL;;
     readIfaceUrlFromFile(&ifaceServerAddr);
     PushAgentSingleton::getInstance().setPushInterfaceServerAddress(ifaceServerAddr);
+    if (ifaceServerAddr != NULL) {
+        free(ifaceServerAddr);
+        ifaceServerAddr = NULL;
+    }
     
     // fourth, check network status every 1minutes.
     timer_t checkNetworkStatusTimerId;
@@ -349,8 +381,14 @@ int main(int argc, char **argv) {
     getInfoAndStartPushAgent();
     
     int i = 0;
-    while (1) {
-        sleep(60);
+    char c;
+    while (c = fgetc(stdin)) {
+        if (c == 'q') {
+            break;
+        }
+    }
+//    while (1) {
+//        sleep(60);
         //log(DEBUG, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n");
         //if (i % 2 == 0) PushAgentSingleton::getInstance().getPushConnection()->stopPushAgent();
         //else PushAgentSingleton::getInstance().getPushConnection()->startPushAgent();
@@ -369,7 +407,7 @@ int main(int argc, char **argv) {
             exit(0);
         }
         */
-    }
+//    }
     
     if (checkNetworkStatusTimerId > 0) {
         Utils::stopTimer(checkNetworkStatusTimerId);
@@ -379,7 +417,24 @@ int main(int argc, char **argv) {
         mq_close(mqDes);
         mq_unlink(MQ_NAME_MAINQUEUE);
     }
-    return 0;
+    if (mq != NULL) {
+        delete mq;
+    }
+    
+    PushAgentSingleton::getInstance().removeAllData();
+    
+    if (http_server != NULL) {
+        free(http_server);
+        http_server = NULL;
+    }
+    if (http_proxy_server != NULL) {
+        free(http_proxy_server);
+        http_proxy_server = NULL;
+    }
+
+    sleep(3);
+    log(DEBUG, "exit(EXIT_SUCCESS)\n");
+    exit(EXIT_SUCCESS);
 }
 
 void checkNetworkStatusTimerHandler(int sig, siginfo_t *si, void *uc) {

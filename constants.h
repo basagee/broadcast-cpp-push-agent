@@ -18,6 +18,10 @@
 #define _CONSTANTS_H_
 
 #include <stdio.h>
+#include <string.h>
+#include <sys/time.h>
+#include <time.h>
+#include <math.h>
 
 #define VERSION "00.01.00"
 
@@ -29,6 +33,7 @@
 // message queue name
 // main 
 #define MQ_NAME_MAINQUEUE                       "/pushAgentMainMessageQueue"
+#define MQ_NAME_MAINQUEUE_SIZE                  26
 
 // Push Interface server
 #define PUSH_IF_CONTEXT                         "/is/api/appRequest/SessionRequest"
@@ -44,9 +49,28 @@ enum LOG_LEVEL_VLAUE {
 
 // debug
 #define LOG_LEVEL DEBUG
+#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
-#define log(level, fmt, ...) \
-    do { if (level >= LOG_LEVEL) fprintf(stderr, "%s:%d:%s(): " fmt, __FILE__, \
-                                __LINE__, __func__, ##__VA_ARGS__); } while(0)
+#define log(level, fmt, ...)  do { \
+        if (level >= LOG_LEVEL) { \
+            time_t     now = time(0); \
+            struct tm  tstruct; \
+            char       buf[80]; \
+            \
+            tstruct = *localtime(&now); \
+            struct timeval tv; \
+            gettimeofday(&tv, NULL); \
+            int millisec = lrint(tv.tv_usec/1000.0); \
+            if (millisec>=1000) { \
+                millisec -=1000; \
+                tv.tv_sec++; \
+            } \
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tstruct); \
+            \
+            fprintf(stderr, "[%s.%03d] %s:%d:%s(): " fmt, \
+                                buf, millisec,  __FILENAME__, \
+                                __LINE__, __func__, ##__VA_ARGS__); \
+        } \
+    } while(0)
 
 #endif          // _CONSTANTS_H_

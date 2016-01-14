@@ -153,12 +153,27 @@ PushConnData* PushGateway::getPushGatewayInfoFromServer(const char* deviceId, ht
             log(DEBUG, "     (char*)resDoc[\"CONN_IP\"].GetString() = %s\n", (char*)resDoc["CONN_IP"].GetString());
             connData->setKeepAlivePeriod((char*)resDoc["KEEP_ALIVE_PERIOD"].GetString());
             *retCode = ret;
+            
+            if (recvData != NULL) {
+                free(recvData);
+                recvData = NULL;
+            }
             return connData;
         }
         *retCode = ERRSERVER;
+            
+        if (recvData != NULL) {
+            free(recvData);
+            recvData = NULL;
+        }
         return NULL;
     }
         
+            
+    if (recvData != NULL) {
+        free(recvData);
+        recvData = NULL;
+    }
     *retCode = ret;
     return NULL;
 }

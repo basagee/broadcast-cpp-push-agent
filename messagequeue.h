@@ -22,6 +22,8 @@
 #include <mqueue.h>
 #include <fcntl.h>              /* For definition of O_NONBLOCK */
 
+#include "constants.h"
+
 #define MAX_MESSAGE_QUEUE_MSGSIZE 1024
 /**
  * POSIX Message Queue를 참조하면 된다. 
@@ -29,7 +31,7 @@
  */
 class MessageQueueInfo {
     public :
-        char *mqName;
+        char mqName[MQ_NAME_MAINQUEUE_SIZE + 1];
         int mqNameSize;
         int flag;
         void (*Func)(mqd_t* mqDes, void* buffer, int bufferSize, void* userData);
