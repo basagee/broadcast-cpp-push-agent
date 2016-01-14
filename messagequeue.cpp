@@ -50,7 +50,7 @@ mqd_t MessageQueue::notifySetup(MessageQueueInfo& info) {
     attr.mq_msgsize = MAX_MESSAGE_QUEUE_MSGSIZE;
     
     // open message queue 
-    mq_unlink(info.mqName);
+    //mq_unlink(info.mqName);
     mqDes = mq_open(info.mqName, info.flag, PMODE, &attr);
     if (mqDes == (mqd_t) -1) {
         log(ERROR, "mq_open() failed...\n");
@@ -71,9 +71,9 @@ mqd_t MessageQueue::notifySetup(MessageQueueInfo& info) {
 /*
  * 메시지 큐를 닫는다. 
  */
-int MessageQueue::closeMessageQueue(mqd_t mqDes) {
-    if (mqDes != -1) {
-        return mq_close(mqDes);
+int MessageQueue::closeMessageQueue() {
+    if (this->mqDes != -1) {
+        return mq_close(this->mqDes);
     }
     return -1;
 }
@@ -105,12 +105,14 @@ void MessageQueue::threadFunction(sigval_t sv) {
     void* userData;
     
     NotifiedMessageInfo* info = (NotifiedMessageInfo*)sv.sival_ptr;
-    mqDes = info->mqDes;
-    Func = info->Func;
-    userData = info->userData;
-    delete info;
+    if (info != NULL) {
+        mqDes = info->mqDes;
+        Func = info->Func;
+        userData = info->userData;
+        delete info;
+    }
     
-    if (mqDes == -1) {
+    if (info == NULL || mqDes == -1) {
         pthread_exit(NULL);
         return;
     }

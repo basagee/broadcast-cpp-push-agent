@@ -54,7 +54,7 @@ class MessageQueue {
         /*
          * 메시지 큐를 닫는다. 
          */
-        int closeMessageQueue(mqd_t mqDes);
+        int closeMessageQueue();
         mqd_t getMessgeQueueDes();
 
     private:

@@ -98,6 +98,8 @@ class PushAgentSingleton {
         }
         
         timer_t retryPushGatewayTimerId;
+        timer_t checkNetworkStatusTimerId;
+        MessageQueue *pushAgentMessageQueue;
         int processingRetryConnection;
 
         static void killPushAgentSingleton() {
@@ -118,7 +120,10 @@ class PushAgentSingleton {
             pInst = &inst;
             
             pInst->retryPushGatewayTimerId = 0;
+            pInst->checkNetworkStatusTimerId = 0;
+            pInst->pushAgentMessageQueue = NULL;
             pInst->processingRetryConnection = 0;
+
             if (pInst->getPushConnection() == NULL) {
                 log(DEBUG, "PushConnection created!!!!\n");
                 pInst->createNewPushConnection(0);
@@ -245,7 +250,7 @@ int writeDeviceIdToFile(char *deviceId) {
 }
 
 int getInfoAndStartPushAgent() {
-    PushAgentSingleton::getInstance().processingRetryConnection = 0;
+    PushAgentSingleton::getInstance().processingRetryConnection = 1;
     PushGateway pushGateway;
     
     if (PushAgentSingleton::getInstance().getPushInterfaceServerAddress() == NULL) {
@@ -332,7 +337,47 @@ void setDeviceId() {
     }
 }
 
+void exitRelease() {
+    if (PushAgentSingleton::getInstance().checkNetworkStatusTimerId > 0) {
+        Utils::stopTimer(PushAgentSingleton::getInstance().checkNetworkStatusTimerId);
+    }
+    PushAgentSingleton::getInstance().checkNetworkStatusTimerId = 0;
+    
+    if (PushAgentSingleton::getInstance().pushAgentMessageQueue != NULL) {
+        PushAgentSingleton::getInstance().pushAgentMessageQueue->closeMessageQueue();
+        delete PushAgentSingleton::getInstance().pushAgentMessageQueue;
+    }
+    PushAgentSingleton::getInstance().pushAgentMessageQueue = NULL;
+
+    PushAgentSingleton::getInstance().removeAllData();
+    
+    if (http_server != NULL) {
+        free(http_server);
+        http_server = NULL;
+    }
+    if (http_proxy_server != NULL) {
+        free(http_proxy_server);
+        http_proxy_server = NULL;
+    }
+}
+
+void catchSigIntHandler(int s){
+    printf("Caught signal %d\n", s);
+    exitRelease();
+    sleep(1);
+    
+    exit(1); 
+}
+
 int main(int argc, char **argv) {
+    // catch ctrl+c signal
+    struct sigaction sigIntHandler;
+
+    sigIntHandler.sa_handler = catchSigIntHandler;
+    sigemptyset(&sigIntHandler.sa_mask);
+    sigIntHandler.sa_flags = 0;
+
+    sigaction(SIGINT, &sigIntHandler, NULL);
     
     // first, message queue enable
     MessageQueueInfo info;
@@ -342,17 +387,17 @@ int main(int argc, char **argv) {
     info.flag = O_CREAT | O_RDWR | O_NONBLOCK;
     info.Func = messageQueueFunc;
     
-    MessageQueue* mq = new MessageQueue();
-    mq->notifySetup(info);
+    PushAgentSingleton::getInstance().pushAgentMessageQueue = new MessageQueue();
+    PushAgentSingleton::getInstance().pushAgentMessageQueue->notifySetup(info);
     
-    struct mq_attr attr;
-    attr.mq_maxmsg = 10;
-    attr.mq_msgsize = MAX_MESSAGE_QUEUE_MSGSIZE;
-    mqd_t mqDes = mq_open(MQ_NAME_MAINQUEUE, O_WRONLY|O_CREAT, 0655, &attr);
-    if (mqDes == -1) {
-        log(ERROR, "Send mq_open failed.\n");
-        exit(0);
-    }
+    //struct mq_attr attr;
+    //attr.mq_maxmsg = 10;
+    //attr.mq_msgsize = MAX_MESSAGE_QUEUE_MSGSIZE;
+    //mqd_t mqDes = mq_open(MQ_NAME_MAINQUEUE, O_WRONLY|O_CREAT, 0655, &attr);
+    //if (mqDes == -1) {
+    //    log(ERROR, "Send mq_open failed.\n");
+    //    exit(0);
+    //}
 
     // second, get and set deviceId
     setDeviceId();
@@ -363,7 +408,7 @@ int main(int argc, char **argv) {
         log(ERROR, "network unavailable...\n");
     }
     
-    char* ifaceServerAddr = NULL;;
+    char* ifaceServerAddr = NULL;
     readIfaceUrlFromFile(&ifaceServerAddr);
     PushAgentSingleton::getInstance().setPushInterfaceServerAddress(ifaceServerAddr);
     if (ifaceServerAddr != NULL) {
@@ -372,23 +417,15 @@ int main(int argc, char **argv) {
     }
     
     // fourth, check network status every 1minutes.
-    timer_t checkNetworkStatusTimerId;
-    Utils::startTimer(&checkNetworkStatusTimerId, checkNetworkStatusTimerHandler, 
+    Utils::startTimer(&(PushAgentSingleton::getInstance().checkNetworkStatusTimerId), checkNetworkStatusTimerHandler, 
                                     NULL, CHECK_NETWORK_STATUS_TIMER_INTERVAL, 1);
     
     // fifth, if (deviceId != NULL && ifaceServerAddr != NULL)
     //        then start push agent. 
     getInfoAndStartPushAgent();
     
-    int i = 0;
-    char c;
-    while (c = fgetc(stdin)) {
-        if (c == 'q') {
-            break;
-        }
-    }
-//    while (1) {
-//        sleep(60);
+    while (1) {
+        sleep(3600);
         //log(DEBUG, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n");
         //if (i % 2 == 0) PushAgentSingleton::getInstance().getPushConnection()->stopPushAgent();
         //else PushAgentSingleton::getInstance().getPushConnection()->startPushAgent();
@@ -407,32 +444,11 @@ int main(int argc, char **argv) {
             exit(0);
         }
         */
-//    }
-    
-    if (checkNetworkStatusTimerId > 0) {
-        Utils::stopTimer(checkNetworkStatusTimerId);
     }
     
-    if (mqDes > 0) {
-        mq_close(mqDes);
-        mq_unlink(MQ_NAME_MAINQUEUE);
-    }
-    if (mq != NULL) {
-        delete mq;
-    }
+    exitRelease();
     
-    PushAgentSingleton::getInstance().removeAllData();
-    
-    if (http_server != NULL) {
-        free(http_server);
-        http_server = NULL;
-    }
-    if (http_proxy_server != NULL) {
-        free(http_proxy_server);
-        http_proxy_server = NULL;
-    }
-
-    sleep(3);
+    sleep(1);
     log(DEBUG, "exit(EXIT_SUCCESS)\n");
     exit(EXIT_SUCCESS);
 }

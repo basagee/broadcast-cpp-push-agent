@@ -1,6 +1,6 @@
-info
-build
-hooks
-objects
-refs
+info/
+build/
+hooks/
+objects/
+refs/
 /.project
